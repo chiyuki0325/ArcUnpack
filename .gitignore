@@ -1,0 +1,9 @@
+venv/
+.idea/
+*.litedb
+final/
+extracted_romfs/
+romfs/
+ArcUnpack.LiteDB/bin/
+ArcUnpack.LiteDB/obj/
+ArcUnpack.LiteDB/UltraLiteDB.dll
