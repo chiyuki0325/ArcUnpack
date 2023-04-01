@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
-import sys, shutil, json, subprocess, re
+import sys, shutil, json, subprocess, re, os
 from time import time
 from hashlib import sha1
 
@@ -37,7 +37,10 @@ class Message:
 
 msg = Message()
 
-litedb_path = Path('./ArcUnpack.LiteDB/bin/Release/net7.0/linux-x64/publish/ArcUnpack.LiteDB')
+litedb_path = Path(os.environ.get(
+    'ARCUNPACK_LITEDB_PATH',
+    './ArcUnpack.LiteDB/bin/Release/net7.0/linux-x64/publish/ArcUnpack.LiteDB'
+))
 
 
 class LiteDB:
