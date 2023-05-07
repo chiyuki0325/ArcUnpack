@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
+from copy import deepcopy
 from pathlib import Path
 import sys, shutil, json, subprocess, re, os
 from time import time
 from hashlib import sha1
-
-DIFFICULTY_NAMES = ['Past', 'Present', 'Future', 'Beyond']
-DIFFICULTY_COLORS = ['#3A6B78FF', '#566947FF', '#482B54FF', '#7C1C30FF']
 
 
 class Message:
@@ -39,7 +37,9 @@ msg = Message()
 
 litedb_path = Path(os.environ.get(
     'ARCUNPACK_LITEDB_PATH',
-    './ArcUnpack.LiteDB/bin/Release/net7.0/linux-x64/publish/ArcUnpack.LiteDB'
+    f'./ArcUnpack.LiteDB/bin/Release/net7.0/'
+    f'{("win" if sys.platform == "win32" else "linux")}'
+    f'-{("x64" if sys.maxsize > 2**32 else "")}/publish/ArcUnpack.LiteDB'
 ))
 
 
@@ -159,10 +159,95 @@ msg.ask('Converting songs...')
 level_count = litedb.level_count()
 song_list_path = extracted_romfs_path / 'not_audio_or_images' / 'songs' / 'songlist'
 song_list: dict = json.load(open(song_list_path, 'r'))
-charts_root_path = extracted_romfs_path / 'charts' / 'songs'
-audio_root_path = extracted_romfs_path / 'Fallback' / 'songs'
-jacket_root_path = extracted_romfs_path / 'jackets_large' / 'songs'
-background_root_path = extracted_romfs_path / 'not_audio' / 'img' / 'bg'
+
+
+def copy_audio(_original_id: str, _song_root_path: Path):
+    audio_root_path = extracted_romfs_path / 'Fallback' / 'songs'
+    shutil.copyfile(  # Copy audio
+        audio_root_path / _original_id / 'base.ogg',
+        _song_root_path / 'base.ogg'
+    )
+
+
+def copy_jacket(_original_id: str, _song_root_path: Path):
+    jacket_root_path = extracted_romfs_path / 'jackets_large' / 'songs'
+    shutil.copyfile(  # Copy jacket
+        jacket_root_path / _original_id / 'base.jpg',
+        _song_root_path / 'base.jpg'
+    )
+
+
+def convert_chart(
+        _diff: dict,
+        _song: dict,
+        _original_id: str,
+        _song_root_path: Path,
+        convert_controller_alt_chart_mode: bool = False
+):
+    _background_paths = []
+    background_root_path = extracted_romfs_path / 'not_audio' / 'img' / 'bg'
+    charts_root_path = extracted_romfs_path / 'charts' / 'songs'
+    difficulty_names = ['Past', 'Present', 'Future', 'Beyond']
+    difficulty_colors = ['#3A6B78FF', '#566947FF', '#482B54FF', '#7C1C30FF']
+
+    if not convert_controller_alt_chart_mode:
+        chart_path = charts_root_path / _original_id / f"{_diff['ratingClass']}.aff"
+        if 'has_controller_alt_chart' in _diff and _diff['has_controller_alt_chart']:
+            _has_controller_charts = True
+        else:
+            _has_controller_charts = False
+    else:
+        chart_path = charts_root_path / _original_id / f"{_diff['ratingClass']}c.aff"
+        _has_controller_charts = False
+
+    _chart: dict = {
+        'ChartPath': chart_path.name,
+        'AudioPath': 'base.ogg',
+        'JacketPath': 'base.jpg',
+        'BaseBpm': float(_song['bpm_base']),
+        'Title': (
+            _song['title_localized']['en'] if not convert_controller_alt_chart_mode
+            else _song['title_localized']['en'] + ' (Alt)'
+        ),
+        'Composer': _song['artist'],
+        'Charter': _diff['chartDesigner'],
+        'Illustrator': _diff['jacketDesigner'],
+        'Difficulty': f"{difficulty_names[_diff['ratingClass']]} {_diff['rating']}",
+        'ChartConstant': float(_diff['rating']),
+        'DifficultyColor': difficulty_colors[_diff['ratingClass']],
+    }
+
+    shutil.copyfile(  # Copy chart
+        chart_path,
+        _song_root_path / chart_path.name
+    )
+
+    if _song['side'] in [0, 1]:
+        _chart['Skin'] = {
+            'Side': 'light' if _song['side'] == 0 else 'conflict',
+        }
+    if _song['bpm'] == str(_song['bpm_base']):
+        _chart['SyncBaseBpm'] = True
+    else:
+        _chart['SyncBaseBpm'] = False
+        _chart['BpmText'] = _song['bpm'].replace(' ', '').replace('-', ' - ')
+    if _song['bg'] != '':
+        # Song-specific background
+        background_path = background_root_path / f"{song['bg']}.jpg"
+    else:
+        # Use default background
+        base_background_type = 'byd' if _diff['ratingClass'] == 3 else 'base'
+        base_background_name = 'light' if song['side'] == 0 else 'conflict'
+        background_path = background_root_path / f"{base_background_type}_{base_background_name}.jpg"
+    if not (song_root_path / background_path.name).exists():
+        shutil.copyfile(  # Copy background
+            background_path,
+            song_root_path / background_path.name
+        )
+        _background_paths.append(background_path)
+    _chart['BackgroundPath'] = background_path.name
+    return _chart, _background_paths, _has_controller_charts
+
 
 i: int = level_count + 1
 for song in song_list['songs']:
@@ -171,15 +256,11 @@ for song in song_list['songs']:
     new_id: str = f"{song['set']}.{song['id']}"
     song_root_path = final_path / 'Level' / new_id
     song_root_path.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(  # Copy audio
-        audio_root_path / original_id / 'base.ogg',
-        song_root_path / 'base.ogg'
-    )
-    shutil.copyfile(  # Copy jacket
-        jacket_root_path / original_id / 'base.jpg',
-        song_root_path / 'base.jpg'
-    )
-    converted_song: dict = {
+
+    copy_audio(original_id, song_root_path)
+    copy_jacket(original_id, song_root_path)
+
+    converted_song: dict = {  # Base information
         '_id': i,
         'Type': 'Level',
         'Identifier': new_id,
@@ -187,51 +268,24 @@ for song in song_list['songs']:
         'AddedDate': f"d{song['date']}",
         'Version': 0
     }
+    has_controller_charts: bool = False  # need reconvert
     charts: list[dict] = []
     background_paths: list[Path] = []
     for diff in song['difficulties']:
-        chart_path = charts_root_path / original_id / f"{diff['ratingClass']}.aff"
-        shutil.copyfile(  # Copy chart
-            chart_path,
-            song_root_path / chart_path.name
+        (
+            chart,
+            background_paths_to_extend,
+            has_controller_charts_to_extend
+        ) = convert_chart(
+            diff,
+            song,
+            original_id,
+            song_root_path,
+            False
         )
-        chart: dict = {
-            'ChartPath': chart_path.name,
-            'AudioPath': 'base.ogg',
-            'JacketPath': 'base.jpg',
-            'BaseBpm': float(song['bpm_base']),
-            'Title': song['title_localized']['en'],
-            'Composer': song['artist'],
-            'Charter': diff['chartDesigner'],
-            'Illustrator': diff['jacketDesigner'],
-            'Difficulty': f"{DIFFICULTY_NAMES[diff['ratingClass']]} {diff['rating']}",
-            'ChartConstant': float(diff['rating']),
-            'DifficultyColor': DIFFICULTY_COLORS[diff['ratingClass']],
-        }
-        if song['side'] in [0, 1]:
-            chart['Skin'] = {
-                'Side': 'light' if song['side'] == 0 else 'conflict',
-            }
-        if song['bpm'] == str(song['bpm_base']):
-            chart['SyncBaseBpm'] = True
-        else:
-            chart['SyncBaseBpm'] = False
-            chart['BpmText'] = song['bpm'].replace(' ', '').replace('-', ' - ')
-        if song['bg'] != '':
-            # Song-specific background
-            background_path = background_root_path / f"{song['bg']}.jpg"
-        else:
-            # Use default background
-            base_background_type = 'byd' if diff['ratingClass'] == 3 else 'base'
-            base_background_name = 'light' if song['side'] == 0 else 'conflict'
-            background_path = background_root_path / f"{base_background_type}_{base_background_name}.jpg"
-        if not (song_root_path / background_path.name).exists():
-            shutil.copyfile(  # Copy background
-                background_path,
-                song_root_path / background_path.name
-            )
-            background_paths.append(background_path)
-        chart['BackgroundPath'] = background_path.name
+        background_paths.extend(background_paths_to_extend)
+        if has_controller_charts_to_extend:
+            has_controller_charts = True
         charts.append(chart)
     converted_song['Settings'] = {
         'Charts': charts,
@@ -248,6 +302,41 @@ for song in song_list['songs']:
         level_identifiers[song['set']] = []
     level_identifiers[song['set']].append(new_id)
     i += 1
+
+    if has_controller_charts:
+        converted_song_alt: dict = deepcopy(converted_song)
+        alt_new_id: str = f"{song['set']}.{song['id']}.alt"
+        song_root_path = final_path / 'Level' / alt_new_id
+        song_root_path.mkdir(parents=True, exist_ok=True)
+        copy_audio(original_id, song_root_path)
+        copy_jacket(original_id, song_root_path)
+        converted_song_alt['_id'] = i
+        converted_song_alt['Identifier'] = alt_new_id
+
+        alt_charts: list[dict] = []
+        for diff in song['difficulties']:
+            if 'has_controller_alt_chart' in diff and diff['has_controller_alt_chart']:
+                chart, _, _ = convert_chart(
+                    diff,
+                    song,
+                    original_id,
+                    song_root_path,
+                    True
+                )
+                alt_charts.append(chart)
+        converted_song_alt['Settings'] = {
+            'Charts': alt_charts,
+            'LastOpenedChartPath': alt_charts[-1]['ChartPath'],
+        }
+        converted_song['FileReferences'] = [
+            'base.ogg',
+            'base.jpg',
+            *map(lambda x: x.name, background_paths),
+            *map(lambda x: x['ChartPath'], alt_charts),
+        ]
+        level_identifiers[song['set']].append(alt_new_id)
+        converted_songs.append(converted_song_alt)
+        i += 1
 
 msg.ask('Converting packs...')
 
@@ -289,6 +378,8 @@ for pack in pack_list['packs']:
 
 msg.ask('Moving files...')
 
+# exit(0)
+
 # Move files
 storage_root_path = final_path / 'storage'
 storage_root_path.mkdir(parents=True, exist_ok=True)
@@ -297,9 +388,12 @@ for type_name in ['Level', 'Pack']:
     for file in (final_path / type_name).glob('**/*'):
         if file.is_file():
             file_real_path: str = file.relative_to(final_path).as_posix()
-            file_hash_path = storage_root_path / f"{sha1(open(file, 'rb').read()).hexdigest()}{file.suffix}"
-            if not file_hash_path.exists():
-                file.rename(file_hash_path)
+            file_hash: str = sha1(open(file, 'rb').read()).hexdigest()
+            file_hash_path = storage_root_path / f"{file_hash}{file.suffix}"
+            file_hash_path_optimized = storage_root_path / file_hash[0] / file_hash[1] / f"{file_hash}{file.suffix}"
+            file_hash_path_optimized.parent.mkdir(parents=True, exist_ok=True)
+            if not file_hash_path_optimized.exists():
+                file.rename(file_hash_path_optimized)
             converted_files.append({
                 '_id': file_real_path,
                 'RealPath': file_hash_path.name,
