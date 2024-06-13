@@ -381,6 +381,7 @@ msg.ask('Moving files...')
 # exit(0)
 
 # Move files
+"""
 storage_root_path = final_path / 'storage'
 storage_root_path.mkdir(parents=True, exist_ok=True)
 
@@ -400,6 +401,7 @@ for type_name in ['Level', 'Pack']:
                 'CorrectHashPath': file_hash_path.name,
             })
     shutil.rmtree(final_path / type_name)
+"""
 
 msg.ask("Updating database...")
 
